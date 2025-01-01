@@ -4,25 +4,11 @@ import time
 import json
 import pyais
 import websocket
-from math import radians, log, tan, pi, degrees, atan, exp
+from math import radians, cos, copysign
 
 from avnav_api import AVNApi
 
 sys.path.insert(0, os.path.dirname(__file__))
-
-R = 6378137.0
-
-def ll2grid(point):
-    lat, lon = point
-    x = radians(lon) * R
-    y = log(tan(pi / 4 + radians(lat) / 2)) * R
-    return x, y
-
-def grid2ll(xy):
-    x, y = xy
-    lat = degrees(2 * atan(exp(y / R)) - pi / 2.0)
-    lon = degrees(x / R)
-    return lat, lon
 
 SOURCE = "aisstream"
 API_WS = "apiws"
@@ -123,14 +109,15 @@ class Plugin(object):
                 r=ws.connect(self.config[API_WS],timeout=10)
 
                 def request_msg():
+                  if not self.config[API_KEY]:
+                    raise Exception('no API key')
                   lat,lon = list(map(self.readValue,['gps.lat','gps.lon']))
                   if lat is None or lon is None:
                     raise Exception('no position')
-                  x,y=ll2grid([lat,lon])
                   dist=self.config[DISTANCE]
-                  d=1852*dist
-                  nw = grid2ll([x-d,y-d])
-                  se = grid2ll([x+d,y+d])
+                  d=dist/60
+                  nw = lat+d, lon+d/cos(radians(lat))
+                  se = lat-d, lon-d/cos(radians(lat))
                   ws.send(json.dumps({
                     'APIKey': self.config[API_KEY],
                     'BoundingBoxes': [[nw,se]],
@@ -155,13 +142,14 @@ class Plugin(object):
                   except websocket.WebSocketTimeoutException as x:
                     pass
             except Exception as x:
-                print(x)
+                print('ERROR',x)
                 time.sleep(5)
                 self.api.setStatus("ERROR", f"{x}")
             finally:
                 ws.close()
 
 FIELDS = {
+    # pyais : aisstream
     'msg_type':'MessageID',
     'mmsi':'UserID',
     'second':'Timestamp',
@@ -191,32 +179,44 @@ FIELDS = {
 }
 
 def ais_encode(msg):
-  data={}
+  rpt=None
+  if 'MessageType' not in msg: return
 
   if msg['MessageType']=='PositionReport':
     # {'Message': {'PositionReport': {'Cog': 360, 'CommunicationState': 59916, 'Latitude': 54.43129833333333, 'Longitude': 12.690098333333333, 'MessageID': 1, 'NavigationalStatus': 0, 'PositionAccuracy': True, 'Raim': True, 'RateOfTurn': -128, 'RepeatIndicator': 0, 'Sog': 0, 'Spare': 0, 'SpecialManoeuvreIndicator': 1, 'Timestamp': 18, 'TrueHeading': 511, 'UserID': 211771340, 'Valid': True}},
     rpt=msg['Message']['PositionReport']
-    data={k:rpt[v].strip() if isinstance(rpt[v],str) else rpt[v] for k,v in FIELDS.items() if v in rpt}
 
   if msg['MessageType']=='ShipStaticData':
     # {'Message': {'ShipStaticData': {'AisVersion': 1, 'CallSign': 'PCGZ   ', 'Destination': 'FIUKI               ', 'Dimension': {'A': 124, 'B': 10, 'C': 7, 'D': 9}, 'Dte': False, 'Eta': {'Day': 1, 'Hour': 11, 'Minute': 0, 'Month': 1}, 'FixType': 1, 'ImoNumber': 9207508, 'MaximumStaticDraught': 4.7, 'MessageID': 5, 'Name': 'MISSISSIPPIBORG     ', 'RepeatIndicator': 0, 'Spare': False, 'Type': 70, 'UserID': 244976000, 'Valid': True}},
     rpt=msg['Message']['ShipStaticData']
-    data={k:rpt[v].strip() if isinstance(rpt[v],str) else rpt[v] for k,v in FIELDS.items() if v in rpt}
-    data['to_bow']=rpt['Dimension']['A']
-    data['to_stern']=rpt['Dimension']['B']
-    data['to_port']=rpt['Dimension']['C']
-    data['to_starboard']=rpt['Dimension']['D']
 
   if msg['MessageType']=='AidsToNavigationReport':
     # {'Message': {'AidsToNavigationReport': {'AssignedMode': False, 'AtoN': 0, 'Dimension': {'A': 13, 'B': 13, 'C': 13, 'D': 13}, 'Fixtype': 7, 'Latitude': 54.85855, 'Longitude': 14.04712, 'MessageID': 21, 'Name': 'WK NW-11 WINDFARM', 'NameExtension': 'W=Q>)', 'OffPosition': False, 'PositionAccuracy': True, 'Raim': False, 'RepeatIndicator': 3, 'Spare': False, 'Timestamp': 44, 'Type': 3, 'UserID': 992111887, 'Valid': True, 'VirtualAtoN': False}},
     rpt=msg['Message']['AidsToNavigationReport']
-    data={k:rpt[v].strip() if isinstance(rpt[v],str) else rpt[v] for k,v in FIELDS.items() if v in rpt}
 
-  if data:
+  if rpt:
+    data={k:rpt[v].strip() if isinstance(rpt[v],str) else rpt[v] for k,v in FIELDS.items() if v in rpt}
+    if 'turn' in data:
+      rot=data['turn']
+      if abs(rot)<127:
+        data['turn'] = copysign((rot/4.733)**2,rot)
+      else:
+        del data['turn']
+    if 'speed' in data and data['speed']>=102.3:
+      del data['speed']
+    if 'Dimension' in rpt:
+      data['to_bow']=rpt['Dimension']['A']
+      data['to_stern']=rpt['Dimension']['B']
+      data['to_port']=rpt['Dimension']['C']
+      data['to_starboard']=rpt['Dimension']['D']
+
     nmea=pyais.encode_dict(data, talker_id="AIVDM")
+
     # print(rpt)
     # print(data)
     # print(nmea)
+    # # print(pyais.decode(nmea[0]))
     # print(100*'-')
+
     return nmea
 
