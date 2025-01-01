@@ -1,9 +1,9 @@
 import os
 import sys
-import time
 import json
 import pyais
 import websocket
+from time import monotonic, sleep
 from math import radians, cos, copysign
 
 from avnav_api import AVNApi
@@ -121,15 +121,16 @@ class Plugin(object):
                   ws.send(json.dumps({
                     'APIKey': self.config[API_KEY],
                     'BoundingBoxes': [[nw,se]],
+                    'FilterMessageTypes': ['PositionReport','ShipStaticData','AidsToNavigationReport'],
                   }))
-                  self.t_req=time.monotonic()
+                  self.t_req=monotonic()
                   self.api.setStatus("NMEA", f'listening at ({lat:.5f},{lon:.5f}) {dist}nm')
 
                 request_msg()
 
                 while not self.api.shouldStopMainThread():
                   try:
-                    if time.monotonic()-self.t_req>300:
+                    if monotonic()-self.t_req>300:
                       request_msg()
                     msg=ws.recv()
                     msg=json.loads(msg)
@@ -143,7 +144,7 @@ class Plugin(object):
                     pass
             except Exception as x:
                 print('ERROR',x)
-                time.sleep(5)
+                sleep(10)
                 self.api.setStatus("ERROR", f"{x}")
             finally:
                 ws.close()
