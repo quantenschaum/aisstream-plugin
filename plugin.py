@@ -1,14 +1,19 @@
+#!/usr/bin/env python3
+
 import os
 import sys
 import json
 import pyais
+import socket
+import select
 import websocket
 from time import monotonic, sleep
 from math import radians, cos, copysign
 
-from avnav_api import AVNApi
+if __name__!='__main__':
+    from avnav_api import AVNApi
+    sys.path.insert(0, os.path.dirname(__file__))
 
-sys.path.insert(0, os.path.dirname(__file__))
 
 SOURCE = "aisstream"
 API_WS = "apiws"
@@ -46,7 +51,7 @@ class Plugin(object):
             "data": [],
         }
 
-    def __init__(self, api: AVNApi):
+    def __init__(self, api):
         self.api = api
         self.api.registerEditableParameters(CONFIG, self.changeParam)
         self.api.registerRestart(self.stop)
@@ -221,3 +226,141 @@ def ais_encode(msg):
 
     return nmea
 
+
+class UDPBroadcaster:
+  def __init__(self, addr, port):
+    self.addr=addr or '<broadcast>'
+    self.port=port
+    self.socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
+    self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
+    if 'broadcast' in self.addr:
+      self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+    self.socket.settimeout(1)
+
+  def close(self):
+    self.socket.close()
+
+  def serve(self, message):
+    self.socket.sendto(message.encode(), (self.addr, self.port))
+
+
+class TCPServer:
+  def __init__(self, addr, port):
+    # self.send = send
+    # self.receive = receive
+    if socket.has_dualstack_ipv6():
+      self.server = socket.create_server((addr, port), family=socket.AF_INET6, dualstack_ipv6=True)
+    else:
+      self.server = socket.create_server((addr, port))
+
+    self.conns = []
+
+  def close(self):
+      self.server.close()
+
+  def serve(self, data_to_send, received=lambda d: d):
+    try:
+      rx, tx, er = select.select([self.server], [], [self.server], 0)
+      # print("server", rx, tx, er)
+      for so in rx:
+        conn, addr = so.accept()
+        print("accepted", conn, file=sys.stderr)
+        conn.setblocking(False)
+        self.conns.append(conn)
+
+      if not self.conns:
+        return
+
+      rx, tx, er = select.select(self.conns, self.conns, self.conns, 0)
+      # print("connections", rx, tx, er)
+
+      if tx:
+        # data = self.send()
+        # print(data_to_send, file=sys.stderr)
+        for co in tx:
+          try:
+            # print("TX", co)
+            co.send(data_to_send.encode())
+            # print(data, file=sys.stderr)
+          except Exception as x:
+            print(x, co, file=sys.stderr)
+            self.conns.remove(co)
+
+      for co in rx:
+        try:
+          # print("RX", co)
+          data = co.recv(4096).decode()
+          if data:
+            # print(data, file=sys.stderr)
+            # self.receive(data)
+            received(data)
+        except Exception as x:
+          print(x, co, file=sys.stderr)
+          sleep(3)
+          self.conns.remove(co)
+
+      for co in er:
+        print("ERROR", co, file=sys.stderr)
+        sleep(3)
+        self.conns.remove(co)
+
+    except Exception as x:
+      print(x, file=sys.stderr)
+      sleep(3)
+
+
+if __name__=='__main__':
+    from argparse import ArgumentParser, ArgumentDefaultsHelpFormatter
+
+    parser = ArgumentParser(description='ais-stream NMEA server', formatter_class=ArgumentDefaultsHelpFormatter)
+    parser.add_argument('lat',help='latitude in degrees',type=float)
+    parser.add_argument('lon',help='longitude in degrees',type=float)
+    parser.add_argument('radius',help='radius around position in nm',type=float)
+    parser.add_argument('-k','--apikey',required=True)
+    parser.add_argument('-w','--wsocket',default='wss://stream.aisstream.io/v0/stream')
+    parser.add_argument('-a','--addr',help='server address',default='')
+    parser.add_argument('-p','--port',help='server port',type=int,default=10110)
+    parser.add_argument('-u','--udp',help='broadcast UDP to addr and port',action='store_true')
+    parser.add_argument('-v','--verbose',help='print AIS messages',action='count',default=0)
+    args=parser.parse_args()
+
+
+    while True:
+        try:
+            ws = websocket.WebSocket()
+            ws.connect(args.wsocket,timeout=10)
+
+            if args.udp:
+              s=UDPBroadcaster(args.addr, args.port)
+            else:
+              s=TCPServer(args.addr, args.port)
+
+            def request_msg():
+              lat,lon = args.lat, args.lon
+              d=args.radius/60
+              nw = lat+d, lon+d/cos(radians(lat))
+              se = lat-d, lon-d/cos(radians(lat))
+              ws.send(json.dumps({
+                'APIKey': args.apikey,
+                'BoundingBoxes': [[nw,se]],
+                'FilterMessageTypes': ['PositionReport','ShipStaticData','AidsToNavigationReport'],
+              }))
+
+            request_msg()
+
+            while True:
+              try:
+                msg=ws.recv()
+                msg=json.loads(msg)
+                if args.verbose>0: print(msg)
+                nmea=ais_encode(msg)
+                if args.verbose>1: print(nmea)
+                for sentence in nmea: s.serve(sentence+'\n')
+              except websocket.WebSocketTimeoutException as x:
+                pass
+        except Exception as x:
+            print('ERROR',x)
+            sleep(5)
+        finally:
+            ws.close()
+            s.close()
