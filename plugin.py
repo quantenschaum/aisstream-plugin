@@ -316,7 +316,7 @@ if __name__=='__main__':
     parser.add_argument('lat',help='latitude in degrees',type=float)
     parser.add_argument('lon',help='longitude in degrees',type=float)
     parser.add_argument('radius',help='radius around position in nm',type=float)
-    parser.add_argument('-k','--apikey',required=True)
+    parser.add_argument('-k','--apikey')
     parser.add_argument('-w','--wsocket',default='wss://stream.aisstream.io/v0/stream')
     parser.add_argument('-a','--addr',help='server address',default='')
     parser.add_argument('-p','--port',help='server port',type=int,default=10110)
@@ -352,15 +352,16 @@ if __name__=='__main__':
               try:
                 msg=ws.recv()
                 msg=json.loads(msg)
-                if args.verbose>0: print(msg)
-                nmea=ais_encode(msg)
-                if args.verbose>1: print(nmea)
-                for sentence in nmea: s.serve(sentence+'\n')
+                if args.verbose>0 or 'error' in msg: print(msg)
+                if 'Message' in msg:
+                  nmea=ais_encode(msg)
+                  if args.verbose>1: print(nmea)
+                  for sentence in nmea: s.serve(sentence+'\n')
               except websocket.WebSocketTimeoutException as x:
                 pass
         except Exception as x:
             print('ERROR',x)
-            sleep(5)
+            sleep(10)
         finally:
             ws.close()
             s.close()
