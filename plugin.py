@@ -126,14 +126,7 @@ class Plugin(object):
                   ws.send(json.dumps({
                     'APIKey': self.config[API_KEY],
                     'BoundingBoxes': [[nw,se]],
-                    'FilterMessageTypes': [
-                      'PositionReport',
-                      'StandardClassBPositionReport',
-                      'ExtendedClassBPositionReport',
-                      'ShipStaticData',
-                      'StaticDataReport',
-                      'AidsToNavigationReport'
-                      ],
+                    'FilterMessageTypes': MESSAGE_TYPES
                   }))
                   self.t_req=monotonic()
                   self.api.setStatus("NMEA", f'listening at ({lat:.5f},{lon:.5f}) {dist}nm')
@@ -160,6 +153,15 @@ class Plugin(object):
                 self.api.setStatus("ERROR", f"{x}")
             finally:
                 ws.close()
+
+MESSAGE_TYPES=[
+                'PositionReport',
+                'StandardClassBPositionReport',
+                'ExtendedClassBPositionReport',
+                'ShipStaticData',
+                'StaticDataReport',
+                'AidsToNavigationReport'
+                ]
 
 FIELDS = {
     # pyais : aisstream
@@ -340,8 +342,10 @@ if __name__=='__main__':
             ws.connect(args.wsocket,timeout=10)
 
             if args.udp:
+              print('broadcasting to UDP',args.addr, args.port)
               s=UDPBroadcaster(args.addr, args.port)
             else:
+              print('listening on TCP',args.addr, args.port)
               s=TCPServer(args.addr, args.port)
 
             def request_msg():
@@ -352,7 +356,7 @@ if __name__=='__main__':
               ws.send(json.dumps({
                 'APIKey': args.apikey,
                 'BoundingBoxes': [[nw,se]],
-                'FilterMessageTypes': ['PositionReport','ShipStaticData','AidsToNavigationReport'],
+                'FilterMessageTypes':MESSAGE_TYPES
               }))
 
             request_msg()
