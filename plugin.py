@@ -126,7 +126,14 @@ class Plugin(object):
                   ws.send(json.dumps({
                     'APIKey': self.config[API_KEY],
                     'BoundingBoxes': [[nw,se]],
-                    'FilterMessageTypes': ['PositionReport','ShipStaticData','AidsToNavigationReport'],
+                    'FilterMessageTypes': [
+                      'PositionReport',
+                      'StandardClassBPositionReport',
+                      'ExtendedClassBPositionReport',
+                      'ShipStaticData',
+                      'StaticDataReport',
+                      'AidsToNavigationReport'
+                      ],
                   }))
                   self.t_req=monotonic()
                   self.api.setStatus("NMEA", f'listening at ({lat:.5f},{lon:.5f}) {dist}nm')
@@ -185,46 +192,48 @@ FIELDS = {
 }
 
 def ais_encode(msg):
-  rpt=None
-  if 'MessageType' not in msg: return
+  # print(msg)
+  type=msg.get('MessageType')
+  if not type: return
+  rpt=msg['Message'].get(type)
+  if not rpt: return
 
-  if msg['MessageType']=='PositionReport':
-    # {'Message': {'PositionReport': {'Cog': 360, 'CommunicationState': 59916, 'Latitude': 54.43129833333333, 'Longitude': 12.690098333333333, 'MessageID': 1, 'NavigationalStatus': 0, 'PositionAccuracy': True, 'Raim': True, 'RateOfTurn': -128, 'RepeatIndicator': 0, 'Sog': 0, 'Spare': 0, 'SpecialManoeuvreIndicator': 1, 'Timestamp': 18, 'TrueHeading': 511, 'UserID': 211771340, 'Valid': True}},
-    rpt=msg['Message']['PositionReport']
+  name=msg['MetaData'].get('ShipName')
+  mmsi=msg['MetaData'].get('MMSI')
 
-  if msg['MessageType']=='ShipStaticData':
-    # {'Message': {'ShipStaticData': {'AisVersion': 1, 'CallSign': 'PCGZ   ', 'Destination': 'FIUKI               ', 'Dimension': {'A': 124, 'B': 10, 'C': 7, 'D': 9}, 'Dte': False, 'Eta': {'Day': 1, 'Hour': 11, 'Minute': 0, 'Month': 1}, 'FixType': 1, 'ImoNumber': 9207508, 'MaximumStaticDraught': 4.7, 'MessageID': 5, 'Name': 'MISSISSIPPIBORG     ', 'RepeatIndicator': 0, 'Spare': False, 'Type': 70, 'UserID': 244976000, 'Valid': True}},
-    rpt=msg['Message']['ShipStaticData']
+  rpt.update(rpt.get('ReportA',{}))
+  rpt.update(rpt.get('ReportB',{}))
+  # rpt.update({'ShipName':name,'Name':name,'UserID':mmsi})
 
-  if msg['MessageType']=='AidsToNavigationReport':
-    # {'Message': {'AidsToNavigationReport': {'AssignedMode': False, 'AtoN': 0, 'Dimension': {'A': 13, 'B': 13, 'C': 13, 'D': 13}, 'Fixtype': 7, 'Latitude': 54.85855, 'Longitude': 14.04712, 'MessageID': 21, 'Name': 'WK NW-11 WINDFARM', 'NameExtension': 'W=Q>)', 'OffPosition': False, 'PositionAccuracy': True, 'Raim': False, 'RepeatIndicator': 3, 'Spare': False, 'Timestamp': 44, 'Type': 3, 'UserID': 992111887, 'Valid': True, 'VirtualAtoN': False}},
-    rpt=msg['Message']['AidsToNavigationReport']
+  data={k:rpt[v].strip() if isinstance(rpt[v],str) else rpt[v] for k,v in FIELDS.items() if v in rpt}
+  if 'turn' in data:
+    rot=data['turn']
+    if abs(rot)<127:
+      data['turn'] = copysign((rot/4.733)**2,rot)
+    else:
+      del data['turn']
+  if 'speed' in data and data['speed']>=102.3:
+    del data['speed']
+  if 'Dimension' in rpt:
+    data['to_bow']=rpt['Dimension']['A']
+    data['to_stern']=rpt['Dimension']['B']
+    data['to_port']=rpt['Dimension']['C']
+    data['to_starboard']=rpt['Dimension']['D']
 
-  if rpt:
-    data={k:rpt[v].strip() if isinstance(rpt[v],str) else rpt[v] for k,v in FIELDS.items() if v in rpt}
-    if 'turn' in data:
-      rot=data['turn']
-      if abs(rot)<127:
-        data['turn'] = copysign((rot/4.733)**2,rot)
-      else:
-        del data['turn']
-    if 'speed' in data and data['speed']>=102.3:
-      del data['speed']
-    if 'Dimension' in rpt:
-      data['to_bow']=rpt['Dimension']['A']
-      data['to_stern']=rpt['Dimension']['B']
-      data['to_port']=rpt['Dimension']['C']
-      data['to_starboard']=rpt['Dimension']['D']
+  nmea=pyais.encode_dict(data, talker_id="AIVDM")
 
-    nmea=pyais.encode_dict(data, talker_id="AIVDM")
+  # print(type,mmsi,name)
+  # for k,v in rpt.items():
+  #   print(' ' if k in FIELDS.values() else '!',k,v)
+  # print('data')
+  # for k,v in data.items():
+  #     print(' ',k,v)
+  #
+  # print(nmea)
+  # # print(pyais.decode(nmea[0]))
+  # print(100*'-')
 
-    # print(rpt)
-    # print(data)
-    # print(nmea)
-    # # print(pyais.decode(nmea[0]))
-    # print(100*'-')
-
-    return nmea
+  return nmea
 
 
 class UDPBroadcaster:
