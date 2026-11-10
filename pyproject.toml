@@ -1,0 +1,17 @@
+[project]
+name = "avnav-aisstream-plugin"
+version = "0.1.0"
+description = "plugin for avnav to get ais data from aisstream.io"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "attrs>=26.1.0",
+    "bitarray>=3.12.3",
+    "pyais>=3.3.1",
+    "websocket-client>=1.9.2",
+]
+
+[project.optional-dependencies]
+dev = [
+    "rich>=15.0.0",
+]

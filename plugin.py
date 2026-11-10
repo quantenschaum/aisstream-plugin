@@ -1,17 +1,24 @@
 #!/usr/bin/env python3
 
-import os
-import sys
 import json
-import pyais
-import socket
+import os
 import select
-import websocket
+import socket
+import sys
+from math import copysign, cos, radians
 from time import monotonic, sleep
-from math import radians, cos, copysign
 
-if __name__!='__main__':
+import pyais
+import websocket
+
+try:
+    from rich import print
+except:
+    pass
+
+if __name__ != "__main__":
     from avnav_api import AVNApi
+
     sys.path.insert(0, os.path.dirname(__file__))
 
 
@@ -24,13 +31,13 @@ CONFIG = [
         "name": API_WS,
         "description": "websocket endpoint",
         "type": "STRING",
-        "default": 'wss://stream.aisstream.io/v0/stream',
+        "default": "wss://stream.aisstream.io/v0/stream",
     },
     {
         "name": API_KEY,
         "description": "aisstream.io API key",
         "type": "STRING",
-        "default": '',
+        "default": "",
     },
     {
         "name": DISTANCE,
@@ -42,7 +49,6 @@ CONFIG = [
 
 
 class Plugin(object):
-
     @classmethod
     def pluginInfo(cls):
         return {
@@ -106,274 +112,313 @@ class Plugin(object):
         self.api.log("started")
         self.read_config()
         self.api.setStatus("STARTED", "running")
-        msg_count=0
+        msg_count = 0
 
         while not self.api.shouldStopMainThread():
             try:
                 ws = websocket.WebSocket()
-                r=ws.connect(self.config[API_WS],timeout=10)
+                r = ws.connect(self.config[API_WS], timeout=10)
 
                 def request_msg():
-                  if not self.config[API_KEY]:
-                    raise Exception('no API key')
-                  lat,lon = list(map(self.readValue,['gps.lat','gps.lon']))
-                  if lat is None or lon is None:
-                    raise Exception('no position')
-                  dist=self.config[DISTANCE]
-                  d=dist/60
-                  nw = lat+d, lon+d/cos(radians(lat))
-                  se = lat-d, lon-d/cos(radians(lat))
-                  ws.send(json.dumps({
-                    'APIKey': self.config[API_KEY],
-                    'BoundingBoxes': [[nw,se]],
-                    'FilterMessageTypes': MESSAGE_TYPES
-                  }))
-                  self.t_req=monotonic()
-                  self.api.setStatus("NMEA", f'listening at ({lat:.5f},{lon:.5f}) {dist}nm')
+                    if not self.config[API_KEY]:
+                        raise Exception("no API key")
+                    lat, lon = list(map(self.readValue, ["gps.lat", "gps.lon"]))
+                    if lat is None or lon is None:
+                        raise Exception("no position")
+                    dist = self.config[DISTANCE]
+                    d = dist / 60
+                    nw = lat + d, lon + d / cos(radians(lat))
+                    se = lat - d, lon - d / cos(radians(lat))
+                    ws.send(
+                        json.dumps(
+                            {
+                                "APIKey": self.config[API_KEY],
+                                "BoundingBoxes": [[nw, se]],
+                                "FilterMessageTypes": MESSAGE_TYPES,
+                            }
+                        )
+                    )
+                    self.t_req = monotonic()
+                    self.api.setStatus(
+                        "NMEA", f"listening at ({lat:.5f},{lon:.5f}) {dist}nm"
+                    )
 
                 request_msg()
 
                 while not self.api.shouldStopMainThread():
-                  try:
-                    if monotonic()-self.t_req>300:
-                      request_msg()
-                    msg=ws.recv()
-                    msg=json.loads(msg)
-                    msg_count+=1
-                    nmea=ais_encode(msg)
-                    if nmea:
-                      for s in nmea:
-                        self.api.addNMEA(s,source=SOURCE,omitDecode=False)
-                      self.api.setStatus("NMEA", f'processed {msg_count} messages')
-                  except websocket.WebSocketTimeoutException as x:
-                    pass
+                    try:
+                        if monotonic() - self.t_req > 300:
+                            request_msg()
+                        msg = ws.recv()
+                        msg = json.loads(msg)
+                        msg_count += 1
+                        nmea = ais_encode(msg)
+                        if nmea:
+                            for s in nmea:
+                                self.api.addNMEA(s, source=SOURCE, omitDecode=False)
+                            self.api.setStatus(
+                                "NMEA", f"processed {msg_count} messages"
+                            )
+                    except websocket.WebSocketTimeoutException as x:
+                        pass
             except Exception as x:
-                print('ERROR',x)
+                print("ERROR", x)
                 sleep(10)
                 self.api.setStatus("ERROR", f"{x}")
             finally:
                 ws.close()
 
-MESSAGE_TYPES=[
-                'PositionReport',
-                'StandardClassBPositionReport',
-                'ExtendedClassBPositionReport',
-                'ShipStaticData',
-                'StaticDataReport',
-                'AidsToNavigationReport'
-                ]
+
+MESSAGE_TYPES = [
+    "PositionReport",
+    "StandardClassBPositionReport",
+    "ExtendedClassBPositionReport",
+    "ShipStaticData",
+    "StaticDataReport",
+    "AidsToNavigationReport",
+]
 
 FIELDS = {
     # pyais : aisstream
-    'msg_type':'MessageID',
-    'mmsi':'UserID',
-    'second':'Timestamp',
-    'status':'NavigationalStatus',
-    'lat':'Latitude',
-    'lon':'Longitude',
-    'heading':'TrueHeading',
-    'maneuver':'SpecialManoeuvreIndicator',
-    'course':'Cog',
-    'speed':'Sog',
-    'turn':'RateOfTurn',
-    'imo':'ImoNumber',
-    'callsign':'CallSign',
-    'shipname':'Name',
-    'destination':'Destination',
-    'ship_type':'Type',
-    'draught':'MaximumStaticDraught',
-    'off_position':'OffPosition',
-    'virtual_aid':'VirtualAtoN',
-    'aid_type':'AtoN',
-    'name':'Name',
-    'raim':'Raim',
-    'repeat':'RepeatIndicator',
-    'valid':'Valid',
-    'accuracy':'PositionAccuracy',
+    "msg_type": "MessageID",
+    "mmsi": "UserID",
+    "second": "Timestamp",
+    "status": "NavigationalStatus",
+    "lat": "Latitude",
+    "lon": "Longitude",
+    "heading": "TrueHeading",
+    "maneuver": "SpecialManoeuvreIndicator",
+    "course": "Cog",
+    "speed": "Sog",
+    "turn": "RateOfTurn",
+    "imo": "ImoNumber",
+    "callsign": "CallSign",
+    "shipname": "Name",
+    "destination": "Destination",
+    "ship_type": "Type",
+    "draught": "MaximumStaticDraught",
+    "off_position": "OffPosition",
+    "virtual_aid": "VirtualAtoN",
+    "aid_type": "AtoN",
+    "name": "Name",
+    "raim": "Raim",
+    "repeat": "RepeatIndicator",
+    "valid": "Valid",
+    "accuracy": "PositionAccuracy",
     # 'xxx':'FixType',
 }
 
+
 def ais_encode(msg):
-  # print(msg)
-  type=msg.get('MessageType')
-  if not type: return
-  rpt=msg['Message'].get(type)
-  if not rpt: return
+    # print(msg)
+    type = msg.get("MessageType")
+    if not type:
+        return
+    rpt = msg["Message"].get(type)
+    if not rpt:
+        return
 
-  name=msg['MetaData'].get('ShipName')
-  mmsi=msg['MetaData'].get('MMSI')
+    name = msg["MetaData"].get("ShipName")
+    mmsi = msg["MetaData"].get("MMSI")
 
-  rpt.update(rpt.get('ReportA',{}))
-  rpt.update(rpt.get('ReportB',{}))
-  # rpt.update({'ShipName':name,'Name':name,'UserID':mmsi})
+    rpt.update(rpt.get("ReportA", {}))
+    rpt.update(rpt.get("ReportB", {}))
+    # rpt.update({'ShipName':name,'Name':name,'UserID':mmsi})
 
-  data={k:rpt[v].strip() if isinstance(rpt[v],str) else rpt[v] for k,v in FIELDS.items() if v in rpt}
-  if 'turn' in data:
-    rot=data['turn']
-    if abs(rot)<127:
-      data['turn'] = copysign((rot/4.733)**2,rot)
-    else:
-      del data['turn']
-  if 'speed' in data and data['speed']>=102.3:
-    del data['speed']
-  if 'Dimension' in rpt:
-    data['to_bow']=rpt['Dimension']['A']
-    data['to_stern']=rpt['Dimension']['B']
-    data['to_port']=rpt['Dimension']['C']
-    data['to_starboard']=rpt['Dimension']['D']
+    data = {
+        k: rpt[v].strip() if isinstance(rpt[v], str) else rpt[v]
+        for k, v in FIELDS.items()
+        if v in rpt
+    }
+    if "turn" in data:
+        rot = data["turn"]
+        if abs(rot) < 127:
+            data["turn"] = copysign((rot / 4.733) ** 2, rot)
+        else:
+            del data["turn"]
+    if "speed" in data and data["speed"] >= 102.3:
+        del data["speed"]
+    if "Dimension" in rpt:
+        data["to_bow"] = rpt["Dimension"]["A"]
+        data["to_stern"] = rpt["Dimension"]["B"]
+        data["to_port"] = rpt["Dimension"]["C"]
+        data["to_starboard"] = rpt["Dimension"]["D"]
 
-  nmea=pyais.encode_dict(data, talker_id="AIVDM")
+    # print(data)
 
-  # print(type,mmsi,name)
-  # for k,v in rpt.items():
-  #   print(' ' if k in FIELDS.values() else '!',k,v)
-  # print('data')
-  # for k,v in data.items():
-  #     print(' ',k,v)
-  #
-  # print(nmea)
-  # # print(pyais.decode(nmea[0]))
-  # print(100*'-')
+    nmea = pyais.encode_dict(data, talker_id="AI")
+    # print(nmea)
 
-  return nmea
+    #     print(type,mmsi,name)
+    #     for k,v in rpt.items():
+    #       print(' ' if k in FIELDS.values() else '!',k,v)
+    #     print('data')
+    #     for k,v in data.items():
+    #         print(' ',k,v)
+    #
+    #     print(nmea)
+    #     # print(pyais.decode(nmea[0]))
+    #     print(100*'-')
+
+    return nmea
 
 
 class UDPBroadcaster:
-  def __init__(self, addr, port):
-    self.addr=addr or '<broadcast>'
-    self.port=port
-    self.socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
-    self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
-    if 'broadcast' in self.addr:
-      self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
-    self.socket.settimeout(1)
+    def __init__(self, addr, port):
+        self.addr = addr or "<broadcast>"
+        self.port = port
+        self.socket = socket.socket(
+            socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP
+        )
+        self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
+        if "broadcast" in self.addr:
+            self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+        self.socket.settimeout(1)
 
-  def close(self):
-    self.socket.close()
+    def close(self):
+        self.socket.close()
 
-  def serve(self, message):
-    self.socket.sendto(message.encode(), (self.addr, self.port))
+    def serve(self, message):
+        self.socket.sendto(message.encode(), (self.addr, self.port))
 
 
 class TCPServer:
-  def __init__(self, addr, port):
-    # self.send = send
-    # self.receive = receive
-    if socket.has_dualstack_ipv6():
-      self.server = socket.create_server((addr, port), family=socket.AF_INET6, dualstack_ipv6=True)
-    else:
-      self.server = socket.create_server((addr, port))
+    def __init__(self, addr, port):
+        # self.send = send
+        # self.receive = receive
+        if socket.has_dualstack_ipv6():
+            self.server = socket.create_server(
+                (addr, port), family=socket.AF_INET6, dualstack_ipv6=True
+            )
+        else:
+            self.server = socket.create_server((addr, port))
 
-    self.conns = []
+        self.conns = []
 
-  def close(self):
-      self.server.close()
+    def close(self):
+        self.server.close()
 
-  def serve(self, data_to_send, received=lambda d: d):
-    try:
-      rx, tx, er = select.select([self.server], [], [self.server], 0)
-      # print("server", rx, tx, er)
-      for so in rx:
-        conn, addr = so.accept()
-        print("accepted", conn, file=sys.stderr)
-        conn.setblocking(False)
-        self.conns.append(conn)
-
-      if not self.conns:
-        return
-
-      rx, tx, er = select.select(self.conns, self.conns, self.conns, 0)
-      # print("connections", rx, tx, er)
-
-      if tx:
-        # data = self.send()
-        # print(data_to_send, file=sys.stderr)
-        for co in tx:
-          try:
-            # print("TX", co)
-            co.send(data_to_send.encode())
-            # print(data, file=sys.stderr)
-          except Exception as x:
-            print(x, co, file=sys.stderr)
-            self.conns.remove(co)
-
-      for co in rx:
+    def serve(self, data_to_send, received=lambda d: d):
         try:
-          # print("RX", co)
-          data = co.recv(4096).decode()
-          if data:
-            # print(data, file=sys.stderr)
-            # self.receive(data)
-            received(data)
+            rx, tx, er = select.select([self.server], [], [self.server], 0)
+            # print("server", rx, tx, er)
+            for so in rx:
+                conn, addr = so.accept()
+                print("accepted", conn, file=sys.stderr)
+                conn.setblocking(False)
+                self.conns.append(conn)
+
+            if not self.conns:
+                return
+
+            rx, tx, er = select.select(self.conns, self.conns, self.conns, 0)
+            # print("connections", rx, tx, er)
+
+            if tx:
+                # data = self.send()
+                # print(data_to_send, file=sys.stderr)
+                for co in tx:
+                    try:
+                        # print("TX", co)
+                        co.send(data_to_send.encode())
+                        # print(data, file=sys.stderr)
+                    except Exception as x:
+                        print(x, co, file=sys.stderr)
+                        self.conns.remove(co)
+
+            for co in rx:
+                try:
+                    # print("RX", co)
+                    data = co.recv(4096).decode()
+                    if data:
+                        # print(data, file=sys.stderr)
+                        # self.receive(data)
+                        received(data)
+                except Exception as x:
+                    print(x, co, file=sys.stderr)
+                    sleep(3)
+                    self.conns.remove(co)
+
+            for co in er:
+                print("ERROR", co, file=sys.stderr)
+                sleep(3)
+                self.conns.remove(co)
+
         except Exception as x:
-          print(x, co, file=sys.stderr)
-          sleep(3)
-          self.conns.remove(co)
-
-      for co in er:
-        print("ERROR", co, file=sys.stderr)
-        sleep(3)
-        self.conns.remove(co)
-
-    except Exception as x:
-      print(x, file=sys.stderr)
-      sleep(3)
+            print(x, file=sys.stderr)
+            raise
+            sleep(3)
 
 
-if __name__=='__main__':
-    from argparse import ArgumentParser, ArgumentDefaultsHelpFormatter
+if __name__ == "__main__":
+    from argparse import ArgumentDefaultsHelpFormatter, ArgumentParser
 
-    parser = ArgumentParser(description='ais-stream NMEA server', formatter_class=ArgumentDefaultsHelpFormatter)
-    parser.add_argument('lat',help='latitude in degrees',type=float)
-    parser.add_argument('lon',help='longitude in degrees',type=float)
-    parser.add_argument('radius',help='radius around position in nm',type=float)
-    parser.add_argument('-k','--apikey')
-    parser.add_argument('-w','--wsocket',default='wss://stream.aisstream.io/v0/stream')
-    parser.add_argument('-a','--addr',help='server address',default='')
-    parser.add_argument('-p','--port',help='server port',type=int,default=10110)
-    parser.add_argument('-u','--udp',help='broadcast UDP to addr and port',action='store_true')
-    parser.add_argument('-v','--verbose',help='print AIS messages',action='count',default=0)
-    args=parser.parse_args()
-
+    parser = ArgumentParser(
+        description="ais-stream NMEA server",
+        formatter_class=ArgumentDefaultsHelpFormatter,
+    )
+    parser.add_argument("lat", help="latitude in degrees", type=float)
+    parser.add_argument("lon", help="longitude in degrees", type=float)
+    parser.add_argument("radius", help="radius around position in nm", type=float)
+    parser.add_argument("-k", "--apikey")
+    parser.add_argument(
+        "-w", "--wsocket", default="wss://stream.aisstream.io/v0/stream"
+    )
+    parser.add_argument("-a", "--addr", help="server address", default="")
+    parser.add_argument("-p", "--port", help="server port", type=int, default=10110)
+    parser.add_argument(
+        "-u", "--udp", help="broadcast UDP to addr and port", action="store_true"
+    )
+    parser.add_argument(
+        "-v", "--verbose", help="print AIS messages", action="count", default=0
+    )
+    args = parser.parse_args()
 
     while True:
         try:
             ws = websocket.WebSocket()
-            ws.connect(args.wsocket,timeout=10)
+            ws.connect(args.wsocket, timeout=10)
 
             if args.udp:
-              print('broadcasting to UDP',args.addr, args.port)
-              s=UDPBroadcaster(args.addr, args.port)
+                print("broadcasting to UDP", args.addr, args.port)
+                s = UDPBroadcaster(args.addr, args.port)
             else:
-              print('listening on TCP',args.addr, args.port)
-              s=TCPServer(args.addr, args.port)
+                print("listening on TCP", args.addr, args.port)
+                s = TCPServer(args.addr, args.port)
 
             def request_msg():
-              lat,lon = args.lat, args.lon
-              d=args.radius/60
-              nw = lat+d, lon+d/cos(radians(lat))
-              se = lat-d, lon-d/cos(radians(lat))
-              ws.send(json.dumps({
-                'APIKey': args.apikey,
-                'BoundingBoxes': [[nw,se]],
-                'FilterMessageTypes':MESSAGE_TYPES
-              }))
+                lat, lon = args.lat, args.lon
+                d = args.radius / 60
+                nw = lat + d, lon + d / cos(radians(lat))
+                se = lat - d, lon - d / cos(radians(lat))
+                ws.send(
+                    json.dumps(
+                        {
+                            "APIKey": args.apikey,
+                            "BoundingBoxes": [[nw, se]],
+                            "FilterMessageTypes": MESSAGE_TYPES,
+                        }
+                    )
+                )
 
             request_msg()
 
             while True:
-              try:
-                msg=ws.recv()
-                msg=json.loads(msg)
-                if args.verbose>0 or 'error' in msg: print(msg)
-                if 'Message' in msg:
-                  nmea=ais_encode(msg)
-                  if args.verbose>1: print(nmea)
-                  for sentence in nmea: s.serve(sentence+'\n')
-              except websocket.WebSocketTimeoutException as x:
-                pass
+                try:
+                    msg = ws.recv()
+                    msg = json.loads(msg)
+                    if "error" in msg or args.verbose > 1:
+                        print(msg, file=sys.stderr)
+                    if "Message" in msg:
+                        nmea = ais_encode(msg)
+                        for sentence in nmea or []:
+                            if args.verbose:
+                                print(sentence)
+                            s.serve(sentence + "\n")
+                except websocket.WebSocketTimeoutException as x:
+                    pass
         except Exception as x:
-            print('ERROR',x)
+            print("ERROR", x)
             sleep(10)
         finally:
             ws.close()
