@@ -8,19 +8,17 @@ import sys
 from math import copysign, cos, radians
 from time import monotonic, sleep
 
-import pyais
-import websocket
+sys.path.insert(0, os.path.dirname(__file__))
 
 try:
     from rich import print
 except:
     pass
 
-if __name__ != "__main__":
+try:
     from avnav_api import AVNApi
-
-    sys.path.insert(0, os.path.dirname(__file__))
-
+except:
+    pass
 
 SOURCE = "aisstream"
 API_WS = "apiws"
@@ -109,6 +107,8 @@ class Plugin(object):
             return a.value
 
     def run(self):
+        import websocket
+
         self.api.log("started")
         self.read_config()
         self.api.setStatus("STARTED", "running")
@@ -152,7 +152,7 @@ class Plugin(object):
                         msg = ws.recv()
                         msg = json.loads(msg)
                         msg_count += 1
-                        nmea = ais_encode(msg)
+                        nmea = ais_encode(msg, msg_count % 10)
                         if nmea:
                             for s in nmea:
                                 self.api.addNMEA(s, source=SOURCE, omitDecode=False)
@@ -209,7 +209,9 @@ FIELDS = {
 }
 
 
-def ais_encode(msg):
+def ais_encode(msg, seq=0):
+    import pyais
+
     # print(msg)
     type = msg.get("MessageType")
     if not type:
@@ -246,7 +248,7 @@ def ais_encode(msg):
 
     # print(data)
 
-    nmea = pyais.encode_dict(data, talker_id="AI")
+    nmea = pyais.encode_dict(data, talker_id="AI", sentence_type="VDM", seq_id=seq)
     # print(nmea)
 
     #     print(type,mmsi,name)
@@ -353,6 +355,8 @@ class TCPServer:
 if __name__ == "__main__":
     from argparse import ArgumentDefaultsHelpFormatter, ArgumentParser
 
+    import websocket
+
     parser = ArgumentParser(
         description="ais-stream NMEA server",
         formatter_class=ArgumentDefaultsHelpFormatter,
@@ -403,6 +407,7 @@ if __name__ == "__main__":
 
             request_msg()
 
+            seq = 0
             while True:
                 try:
                     msg = ws.recv()
@@ -410,7 +415,8 @@ if __name__ == "__main__":
                     if "error" in msg or args.verbose > 1:
                         print(msg, file=sys.stderr)
                     if "Message" in msg:
-                        nmea = ais_encode(msg)
+                        seq = (seq + 1) % 10
+                        nmea = ais_encode(msg, seq)
                         for sentence in nmea or []:
                             if args.verbose:
                                 print(sentence)
